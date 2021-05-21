@@ -372,7 +372,7 @@ NSString *const errorMethod = @"error";
   _exposureMode = ExposureModeAuto;
   _focusMode = FocusModeAuto;
   _lockedCaptureOrientation = UIDeviceOrientationUnknown;
-  _deviceOrientation = orientation;
+  _deviceOrientation = UIDeviceOrientationPortrait;
 
   NSError *localError = nil;
   _captureVideoInput = [AVCaptureDeviceInput deviceInputWithDevice:_captureDevice
@@ -1276,7 +1276,7 @@ NSString *const errorMethod = @"error";
     [_camera setDeviceOrientation:orientation];
   }
 
-  [self sendDeviceOrientation:orientation];
+//  [self sendDeviceOrientation:orientation];
 }
 
 - (void)sendDeviceOrientation:(UIDeviceOrientation)orientation {
@@ -1387,7 +1387,7 @@ NSString *const errorMethod = @"error";
                    @([_camera.captureDevice isExposurePointOfInterestSupported]),
                @"focusPointSupported" : @([_camera.captureDevice isFocusPointOfInterestSupported]),
              }];
-      [self sendDeviceOrientation:[UIDevice currentDevice].orientation];
+    //  [self sendDeviceOrientation:[UIDevice currentDevice].orientation];
       [_camera start];
       result(nil);
     } else if ([@"takePicture" isEqualToString:call.method]) {
