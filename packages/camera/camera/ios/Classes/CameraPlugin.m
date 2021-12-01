@@ -341,6 +341,7 @@ static ResolutionPreset getResolutionPresetForString(NSString *preset) {
 @property(assign, nonatomic) CMTime audioTimeOffset;
 @property(nonatomic) CMMotionManager *motionManager;
 @property AVAssetWriterInputPixelBufferAdaptor *videoAdaptor;
+@property(assign, nonatomic) BOOL isVideoFrameAvailable;
 @end
 
 @implementation FLTCam {
@@ -606,7 +607,7 @@ NSString *const errorMethod = @"error";
 - (void)captureOutput:(AVCaptureOutput *)output
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
            fromConnection:(AVCaptureConnection *)connection {
-  if (output == _captureVideoOutput) {
+  if (output == _captureVideoOutput && connection.isVideoOrientationSupported) {
     CVPixelBufferRef newBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
     CFRetain(newBuffer);
     CVPixelBufferRef old = _latestPixelBuffer;
@@ -694,12 +695,13 @@ NSString *const errorMethod = @"error";
     CFRetain(sampleBuffer);
     CMTime currentSampleTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
 
-    if (_videoWriter.status != AVAssetWriterStatusWriting) {
+    if (_videoWriter.status != AVAssetWriterStatusWriting && connection.isVideoOrientationSupported) {
       [_videoWriter startWriting];
       [_videoWriter startSessionAtSourceTime:currentSampleTime];
     }
 
     if (output == _captureVideoOutput) {
+        _isVideoFrameAvailable=true;
       if (_videoIsDisconnected) {
         _videoIsDisconnected = NO;
 
@@ -718,34 +720,40 @@ NSString *const errorMethod = @"error";
       CVPixelBufferRef nextBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
       CMTime nextSampleTime = CMTimeSubtract(_lastVideoSampleTime, _videoTimeOffset);
       [_videoAdaptor appendPixelBuffer:nextBuffer withPresentationTime:nextSampleTime];
-    } else {
-      CMTime dur = CMSampleBufferGetDuration(sampleBuffer);
+       
+    }
+    else{
+        if(_isVideoFrameAvailable){
+      
+             CMTime dur = CMSampleBufferGetDuration(sampleBuffer);
 
-      if (dur.value > 0) {
-        currentSampleTime = CMTimeAdd(currentSampleTime, dur);
-      }
+             if (dur.value > 0) {
+               currentSampleTime = CMTimeAdd(currentSampleTime, dur);
+             }
 
-      if (_audioIsDisconnected) {
-        _audioIsDisconnected = NO;
+             if (_audioIsDisconnected) {
+               _audioIsDisconnected = NO;
 
-        if (_audioTimeOffset.value == 0) {
-          _audioTimeOffset = CMTimeSubtract(currentSampleTime, _lastAudioSampleTime);
-        } else {
-          CMTime offset = CMTimeSubtract(currentSampleTime, _lastAudioSampleTime);
-          _audioTimeOffset = CMTimeAdd(_audioTimeOffset, offset);
+               if (_audioTimeOffset.value == 0) {
+                 _audioTimeOffset = CMTimeSubtract(currentSampleTime, _lastAudioSampleTime);
+               } else {
+                 CMTime offset = CMTimeSubtract(currentSampleTime, _lastAudioSampleTime);
+                 _audioTimeOffset = CMTimeAdd(_audioTimeOffset, offset);
+               }
+
+               return;
+             }
+
+             _lastAudioSampleTime = currentSampleTime;
+
+             if (_audioTimeOffset.value != 0) {
+               CFRelease(sampleBuffer);
+               sampleBuffer = [self adjustTime:sampleBuffer by:_audioTimeOffset];
+             }
+
+             [self newAudioSample:sampleBuffer];
+          
         }
-
-        return;
-      }
-
-      _lastAudioSampleTime = currentSampleTime;
-
-      if (_audioTimeOffset.value != 0) {
-        CFRelease(sampleBuffer);
-        sampleBuffer = [self adjustTime:sampleBuffer by:_audioTimeOffset];
-      }
-
-      [self newAudioSample:sampleBuffer];
     }
 
     CFRelease(sampleBuffer);
@@ -828,6 +836,7 @@ NSString *const errorMethod = @"error";
 }
 
 - (void)startVideoRecordingWithResult:(FlutterResult)result {
+    _isVideoFrameAvailable=false;
   if (!_isRecording) {
     NSError *error;
     _videoRecordingPath = [self getTemporaryFilePathWithExtension:@"mp4"
@@ -844,8 +853,8 @@ NSString *const errorMethod = @"error";
     }
     _isRecording = YES;
     _isRecordingPaused = NO;
-    _videoTimeOffset = CMTimeMake(0, 1);
-    _audioTimeOffset = CMTimeMake(0, 1);
+    _videoTimeOffset = CMTimeMakeWithSeconds(0, 600);
+      _audioTimeOffset = CMTimeMakeWithSeconds(0, 600);
     _videoIsDisconnected = NO;
     _audioIsDisconnected = NO;
     result(nil);
@@ -855,6 +864,7 @@ NSString *const errorMethod = @"error";
 }
 
 - (void)stopVideoRecordingWithResult:(FlutterResult)result {
+    _isVideoFrameAvailable=false;
   if (_isRecording) {
     _isRecording = NO;
 
@@ -1156,7 +1166,7 @@ NSString *const errorMethod = @"error";
   }
 
   _videoWriter = [[AVAssetWriter alloc] initWithURL:outputURL
-                                           fileType:AVFileTypeMPEG4
+                                           fileType:AVFileTypeQuickTimeMovie
                                               error:&error];
   NSParameterAssert(_videoWriter);
   if (error) {
@@ -1165,7 +1175,7 @@ NSString *const errorMethod = @"error";
   }
 
   NSDictionary *videoSettings = [_captureVideoOutput
-      recommendedVideoSettingsForAssetWriterWithOutputFileType:AVFileTypeMPEG4];
+      recommendedVideoSettingsForAssetWriterWithOutputFileType:AVFileTypeQuickTimeMovie];
   _videoWriterInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo
                                                          outputSettings:videoSettings];
 
@@ -1178,6 +1188,9 @@ NSString *const errorMethod = @"error";
   NSParameterAssert(_videoWriterInput);
 
   _videoWriterInput.expectsMediaDataInRealTime = YES;
+    [_videoWriter addInput:_videoWriterInput];
+
+    [_captureVideoOutput setSampleBufferDelegate:self queue:_dispatchQueue];
 
   // Add the audio input
   if (_enableAudio) {
@@ -1206,9 +1219,6 @@ NSString *const errorMethod = @"error";
     [self.captureDevice unlockForConfiguration];
   }
 
-  [_videoWriter addInput:_videoWriterInput];
-
-  [_captureVideoOutput setSampleBufferDelegate:self queue:_dispatchQueue];
 
   return YES;
 }
